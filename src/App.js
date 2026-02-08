@@ -129,10 +129,17 @@ function App() {
     return false;
   };
 
-  // Speak announcement
+  // Speak announcement - UPDATED: Check forceStopActive at the beginning
   const speakAnnouncement = useCallback((message) => {
-    if (!alarmSettings.voiceEnabled || forceStopActive) {
-      addDebugLog('Voice announcements disabled or force stop active - not speaking');
+    // FIRST CHECK: If force stop is active, do NOT speak at all
+    if (forceStopActive) {
+      addDebugLog('FORCE STOP ACTIVE: Blocking announcement');
+      return;
+    }
+
+    // SECOND CHECK: Normal voice enabled check
+    if (!alarmSettings.voiceEnabled) {
+      addDebugLog('Voice announcements disabled - not speaking');
       return;
     }
 
@@ -163,10 +170,11 @@ function App() {
     speechSynthesisRef.current.speak(utterance);
   }, [alarmSettings.voiceEnabled, forceStopActive, addDebugLog]);
 
-  // Check for alarms
+  // Check for alarms - UPDATED: Add early return for force stop
   const checkAlarms = useCallback((data) => {
+    // BLOCK ALL ALARM PROCESSING if force stop is active
     if (forceStopActive) {
-      addDebugLog('Force stop active - skipping alarm check');
+      addDebugLog('FORCE STOP ACTIVE: Skipping ALL alarm processing');
       return;
     }
 
@@ -298,9 +306,9 @@ function App() {
     }
   };
 
-  // FORCE STOP ALL - Enhanced
+  // FORCE STOP ALL - Enhanced to completely block all announcements
   const forceStopAnnouncements = () => {
-    addDebugLog('⚡ FORCE STOP: Stopping all announcements and acknowledging all alarms');
+    addDebugLog('⚡ FORCE STOP: Stopping all announcements and blocking future ones');
     setForceStopActive(true);
     
     // 1. Stop all speech immediately
@@ -336,7 +344,10 @@ function App() {
       return newAcknowledged;
     });
     
-    addDebugLog('✅ FORCE STOP ACTIVE: All alarms silenced until reset');
+    // 5. Also clear any active speaking state
+    setIsSpeaking(false);
+    
+    addDebugLog('✅ FORCE STOP ACTIVE: All announcements blocked until reset');
   };
 
   // RESET FORCE STOP - New function
@@ -359,10 +370,14 @@ function App() {
     addDebugLog('✅ Alarm system re-enabled and ready');
   };
 
-  // Announcement interval management
+  // Announcement interval management - UPDATED: Early return for force stop
   useEffect(() => {
     if (forceStopActive) {
       addDebugLog('Force stop active - not starting announcement interval');
+      if (announcementIntervalRef.current) {
+        clearInterval(announcementIntervalRef.current);
+        announcementIntervalRef.current = null;
+      }
       return;
     }
 
@@ -500,11 +515,11 @@ function App() {
     <div className="App">
       <header className="App-header">
         <div className="header-left">
-          <h1>Energy Meter Dashboard</h1>
+          <h1>Main Incomer 33kV Demand Alarm System</h1>
           <div className="alarm-indicator">
             {forceStopActive && (
               <div className="force-stop-indicator">
-                🔇 FORCE STOP ACTIVE
+                🔇 FORCE STOP ACTIVE - ALL ANNOUNCEMENTS BLOCKED
               </div>
             )}
             {activeAlarmsCount > 0 && !forceStopActive && (
@@ -546,7 +561,7 @@ function App() {
         </div>
       </header>
 
-      {/* Active Alarms Popup */}
+      {/* Active Alarms Popup - HIDDEN when force stop is active */}
       {activeUnacknowledgedAlarms.length > 0 && !forceStopActive && (
         <div className="alarm-popup">
           <div className="alarm-popup-header">
@@ -583,6 +598,23 @@ function App() {
                 ⚡ FORCE STOP ALL ALARMS
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Force Stop Active Message */}
+      {forceStopActive && (
+        <div className="force-stop-banner">
+          <div className="force-stop-banner-content">
+            <span className="force-stop-icon">🔇</span>
+            <h3>FORCE STOP ACTIVE - ALL ANNOUNCEMENTS ARE BLOCKED</h3>
+            <p>No voice announcements will be made until you reset the alarm system.</p>
+            <button 
+              onClick={resetForceStop}
+              className="force-stop-banner-btn"
+            >
+              🔄 RESET ALARM SYSTEM
+            </button>
           </div>
         </div>
       )}
@@ -669,7 +701,7 @@ function App() {
                   Current settings: High = {alarmSettings.highSetDemand}kVA, 
                   Low = {alarmSettings.lowSetDemand}kVA, 
                   Refresh every {alarmSettings.autoRefreshInterval}s
-                  {forceStopActive && ' | ⚠️ FORCE STOP ACTIVE'}
+                  {forceStopActive && ' | ⚠️ FORCE STOP ACTIVE - ALL ANNOUNCEMENTS BLOCKED'}
                 </small>
               </div>
             </div>
@@ -854,7 +886,7 @@ function App() {
         </div>
 
         {/* Debug Panel */}
-        <div className={`panel ${openPanels.debug ? 'open' : 'closed'}`}>
+        {/* <div className={`panel ${openPanels.debug ? 'open' : 'closed'}`}>
           <div className="panel-header" onClick={() => togglePanel('debug')}>
             <h3>🐛 Debug Logs</h3>
             <span className="panel-toggle">{openPanels.debug ? '−' : '+'}</span>
@@ -873,7 +905,7 @@ function App() {
               </div>
             </div>
           )}
-        </div>
+        </div> */}
 
       </div>
 
