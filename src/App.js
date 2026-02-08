@@ -35,10 +35,50 @@ function App() {
     alarms: false,
     debug: false
   });
+  const [forceStopActive, setForceStopActive] = useState(() => {
+    const saved = localStorage.getItem('forceStopActive');
+    return saved ? JSON.parse(saved) : false;
+  });
 
   const alarmIntervalRef = useRef(null);
   const announcementIntervalRef = useRef(null);
   const speechSynthesisRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const audioBeepRef = useRef(null);
+
+  // Initialize audio for mobile/browser minimized
+  const initAudio = () => {
+    if (!audioContextRef.current && window.AudioContext) {
+      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    
+    // Preload beep sound
+    if (!audioBeepRef.current) {
+      audioBeepRef.current = new Audio();
+      audioBeepRef.current.src = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAA=='; // Simple beep
+      audioBeepRef.current.preload = 'auto';
+      audioBeepRef.current.volume = 0.7;
+    }
+  };
+
+  // Play beep sound (works even when browser minimized)
+  const playBeep = () => {
+    if (!alarmSettings.voiceEnabled || forceStopActive) return;
+    
+    try {
+      if (audioBeepRef.current) {
+        audioBeepRef.current.currentTime = 0;
+        audioBeepRef.current.play().catch(e => {
+          console.log('Audio play failed, trying to resume context');
+          if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+            audioContextRef.current.resume();
+          }
+        });
+      }
+    } catch (error) {
+      addDebugLog(`Beep error: ${error.message}`);
+    }
+  };
 
   // Toggle panel
   const togglePanel = (panel) => {
@@ -76,6 +116,10 @@ function App() {
     localStorage.setItem('energyMeterAlarmSettings', JSON.stringify(alarmSettings));
   }, [alarmSettings]);
 
+  useEffect(() => {
+    localStorage.setItem('forceStopActive', JSON.stringify(forceStopActive));
+  }, [forceStopActive]);
+
   // Initialize speech synthesis
   const initSpeechSynthesis = () => {
     if ('speechSynthesis' in window) {
@@ -87,14 +131,17 @@ function App() {
 
   // Speak announcement
   const speakAnnouncement = useCallback((message) => {
-    if (!alarmSettings.voiceEnabled) {
-      addDebugLog('Voice announcements disabled - not speaking');
+    if (!alarmSettings.voiceEnabled || forceStopActive) {
+      addDebugLog('Voice announcements disabled or force stop active - not speaking');
       return;
     }
 
     if (!speechSynthesisRef.current) {
       if (!initSpeechSynthesis()) return;
     }
+
+    // Play beep first (works even when minimized)
+    playBeep();
 
     // Cancel any ongoing speech
     speechSynthesisRef.current.cancel();
@@ -114,10 +161,15 @@ function App() {
     };
 
     speechSynthesisRef.current.speak(utterance);
-  }, [alarmSettings.voiceEnabled, addDebugLog]);
+  }, [alarmSettings.voiceEnabled, forceStopActive, addDebugLog]);
 
   // Check for alarms
   const checkAlarms = useCallback((data) => {
+    if (forceStopActive) {
+      addDebugLog('Force stop active - skipping alarm check');
+      return;
+    }
+
     const currentLoad = parseFloat(data.kVA.value);
     const meterName = data.meter_name;
     const timestamp = new Date().toLocaleString();
@@ -184,7 +236,7 @@ function App() {
         return alarm;
       }));
     }
-  }, [alarmSettings, speakAnnouncement, addDebugLog]);
+  }, [alarmSettings, speakAnnouncement, addDebugLog, forceStopActive]);
 
   // Acknowledge alarm
   const acknowledgeAlarm = useCallback((alarmId) => {
@@ -246,8 +298,74 @@ function App() {
     }
   };
 
+  // FORCE STOP ALL - Enhanced
+  const forceStopAnnouncements = () => {
+    addDebugLog('⚡ FORCE STOP: Stopping all announcements and acknowledging all alarms');
+    setForceStopActive(true);
+    
+    // 1. Stop all speech immediately
+    if (speechSynthesisRef.current) {
+      speechSynthesisRef.current.cancel();
+      setIsSpeaking(false);
+    }
+    
+    // 2. Clear the announcement interval
+    if (announcementIntervalRef.current) {
+      clearInterval(announcementIntervalRef.current);
+      announcementIntervalRef.current = null;
+      addDebugLog('Announcement interval cleared');
+    }
+    
+    // 3. Acknowledge ALL active alarms (not just current ones)
+    setAlarms(prev => prev.map(alarm => 
+      alarm.active ? { ...alarm, acknowledged: true } : alarm
+    ));
+    
+    // 4. Also add to acknowledged list to prevent immediate recurrence
+    const activeAlarmIds = alarms
+      .filter(alarm => alarm.active)
+      .map(alarm => alarm.id);
+    
+    setAcknowledgedAlarms(prev => {
+      const newAcknowledged = [...prev];
+      activeAlarmIds.forEach(id => {
+        if (!newAcknowledged.includes(id)) {
+          newAcknowledged.push(id);
+        }
+      });
+      return newAcknowledged;
+    });
+    
+    addDebugLog('✅ FORCE STOP ACTIVE: All alarms silenced until reset');
+  };
+
+  // RESET FORCE STOP - New function
+  const resetForceStop = () => {
+    addDebugLog('🔄 RESET FORCE STOP: Re-enabling alarm system');
+    setForceStopActive(false);
+    
+    // Clear acknowledged alarms list to allow new alarms
+    setAcknowledgedAlarms([]);
+    
+    // Reset all alarm acknowledged status to false
+    setAlarms(prev => prev.map(alarm => ({
+      ...alarm,
+      acknowledged: false
+    })));
+    
+    // Force an immediate data fetch to check current conditions
+    fetchMeterData();
+    
+    addDebugLog('✅ Alarm system re-enabled and ready');
+  };
+
   // Announcement interval management
   useEffect(() => {
+    if (forceStopActive) {
+      addDebugLog('Force stop active - not starting announcement interval');
+      return;
+    }
+
     // Clear any existing interval first
     if (announcementIntervalRef.current) {
       clearInterval(announcementIntervalRef.current);
@@ -281,7 +399,7 @@ function App() {
         announcementIntervalRef.current = null;
       }
     };
-  }, [alarms, alarmSettings.voiceEnabled, alarmSettings.alarmRepeatInterval, speakAnnouncement, addDebugLog]);
+  }, [alarms, alarmSettings.voiceEnabled, alarmSettings.alarmRepeatInterval, speakAnnouncement, addDebugLog, forceStopActive]);
 
   // Fetch meter data
   const fetchMeterData = async () => {
@@ -331,38 +449,40 @@ function App() {
   useEffect(() => {
     addDebugLog('App initialized');
     initSpeechSynthesis();
+    initAudio();
     fetchMeterData();
     
     alarmIntervalRef.current = setInterval(fetchMeterData, alarmSettings.autoRefreshInterval * 1000);
+    
+    // Setup visibility change handler for mobile/browser minimized
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        addDebugLog('Browser minimized/tab hidden');
+        // Ensure audio context is ready when tab becomes active again
+        if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+          audioContextRef.current.resume().then(() => {
+            addDebugLog('Audio context resumed');
+          });
+        }
+      } else {
+        addDebugLog('Browser/tab now visible');
+        // Resume audio context if needed
+        if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+          audioContextRef.current.resume();
+        }
+      }
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     
     return () => {
       addDebugLog('App cleanup');
       if (alarmIntervalRef.current) clearInterval(alarmIntervalRef.current);
       if (announcementIntervalRef.current) clearInterval(announcementIntervalRef.current);
       if (speechSynthesisRef.current) speechSynthesisRef.current.cancel();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, []);
-
-  // Force stop all announcements
-  const forceStopAnnouncements = () => {
-    addDebugLog('Force stopping announcements');
-    if (speechSynthesisRef.current) {
-      speechSynthesisRef.current.cancel();
-      setIsSpeaking(false);
-    }
-    
-    // Clear the announcement interval
-    if (announcementIntervalRef.current) {
-      clearInterval(announcementIntervalRef.current);
-      announcementIntervalRef.current = null;
-      addDebugLog('Announcement interval cleared');
-    }
-    
-    // Also acknowledge all active alarms when force stopping
-    setAlarms(prev => prev.map(alarm => 
-      alarm.active ? { ...alarm, acknowledged: true } : alarm
-    ));
-  };
 
   // Update alarm settings
   const updateAlarmSettings = (newSettings) => {
@@ -382,13 +502,18 @@ function App() {
         <div className="header-left">
           <h1>Energy Meter Dashboard</h1>
           <div className="alarm-indicator">
-            {activeAlarmsCount > 0 && (
+            {forceStopActive && (
+              <div className="force-stop-indicator">
+                🔇 FORCE STOP ACTIVE
+              </div>
+            )}
+            {activeAlarmsCount > 0 && !forceStopActive && (
               <div className={`alarm-badge ${unacknowledgedAlarmsCount > 0 ? 'urgent' : 'acknowledged'}`}>
                 ⚠️ {activeAlarmsCount} Active Alarm{activeAlarmsCount !== 1 ? 's' : ''}
                 {unacknowledgedAlarmsCount > 0 && ` (${unacknowledgedAlarmsCount} unacknowledged)`}
               </div>
             )}
-            {isSpeaking && <div className="speaking-indicator">🔊 Speaking...</div>}
+            {isSpeaking && !forceStopActive && <div className="speaking-indicator">🔊 Speaking...</div>}
             {!alarmSettings.voiceEnabled && <div className="muted-indicator">🔇 Voice Muted</div>}
           </div>
         </div>
@@ -401,18 +526,28 @@ function App() {
           >
             {loading ? 'Refreshing...' : 'Refresh Data'}
           </button>
-          <button 
-            onClick={forceStopAnnouncements}
-            disabled={!isSpeaking && unacknowledgedAlarmsCount === 0}
-            className="stop-btn"
-          >
-            🔇 Force Stop
-          </button>
+          {forceStopActive ? (
+            <button 
+              onClick={resetForceStop}
+              className="reset-force-stop-btn"
+              title="Reset force stop and re-enable alarm system"
+            >
+              🔄 RESET ALARMS
+            </button>
+          ) : (
+            <button 
+              onClick={forceStopAnnouncements}
+              className="force-stop-btn"
+              title="Force stop all announcements and acknowledge all active alarms"
+            >
+              ⚡ FORCE STOP
+            </button>
+          )}
         </div>
       </header>
 
       {/* Active Alarms Popup */}
-      {activeUnacknowledgedAlarms.length > 0 && (
+      {activeUnacknowledgedAlarms.length > 0 && !forceStopActive && (
         <div className="alarm-popup">
           <div className="alarm-popup-header">
             <span className="alarm-icon">🚨</span>
@@ -439,6 +574,15 @@ function App() {
                 </button>
               </div>
             ))}
+            <div className="alarm-popup-footer">
+              <button 
+                onClick={forceStopAnnouncements}
+                className="force-stop-popup-btn"
+                title="Stop all announcements and acknowledge all alarms"
+              >
+                ⚡ FORCE STOP ALL ALARMS
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -525,6 +669,7 @@ function App() {
                   Current settings: High = {alarmSettings.highSetDemand}kVA, 
                   Low = {alarmSettings.lowSetDemand}kVA, 
                   Refresh every {alarmSettings.autoRefreshInterval}s
+                  {forceStopActive && ' | ⚠️ FORCE STOP ACTIVE'}
                 </small>
               </div>
             </div>
@@ -558,15 +703,16 @@ function App() {
                       <span className={`status-badge ${meterData.status?.toLowerCase()}`}>
                         {meterData.status}
                       </span>
-                      {activeAlarmsCount > 0 && (
+                      {activeAlarmsCount > 0 && !forceStopActive && (
                         <span className="active-alarm-indicator">⚠️ Alarm Active</span>
+                      )}
+                      {forceStopActive && (
+                        <span className="force-stop-active-indicator">🔇 Alarms Silenced</span>
                       )}
                     </div>
                   </div>
                   
                   <div className="meter-details">
-                    {/* Meter ID removed */}
-                    
                     <div className="detail-row">
                       <span className="label">Date & Time:</span>
                       <span className="value">{meterData.date_time}</span>
@@ -598,6 +744,7 @@ function App() {
 
                   <div className="last-updated">
                     Last updated: {new Date().toLocaleTimeString()}
+                    {forceStopActive && <span style={{color: '#dc3545', fontWeight: 'bold', marginLeft: '10px'}}> | 🔇 ALARMS SILENCED</span>}
                   </div>
                 </div>
               )}
@@ -622,14 +769,34 @@ function App() {
               <div className="log-header">
                 <div className="log-stats">
                   Active: {activeAlarmsCount} | Total: {alarms.length}
+                  {forceStopActive && ' | 🔇 FORCE STOP ACTIVE'}
                 </div>
-                <button 
-                  onClick={resetAllAlarms}
-                  disabled={alarms.length === 0}
-                  className="clear-log-btn"
-                >
-                  Clear All Alarms
-                </button>
+                <div className="log-actions">
+                  {forceStopActive ? (
+                    <button 
+                      onClick={resetForceStop}
+                      className="reset-force-stop-log-btn"
+                      title="Reset force stop and re-enable alarm system"
+                    >
+                      🔄 Reset Force Stop
+                    </button>
+                  ) : (
+                    <button 
+                      onClick={forceStopAnnouncements}
+                      className="force-stop-log-btn"
+                      title="Stop all announcements and acknowledge all alarms"
+                    >
+                      ⚡ Force Stop
+                    </button>
+                  )}
+                  <button 
+                    onClick={resetAllAlarms}
+                    disabled={alarms.length === 0}
+                    className="clear-log-btn"
+                  >
+                    Clear All Alarms
+                  </button>
+                </div>
               </div>
               
               {alarms.length === 0 ? (
