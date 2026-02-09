@@ -129,7 +129,7 @@ function App() {
     return false;
   };
 
-  // Speak announcement - UPDATED: Check forceStopActive at the beginning
+  // Speak announcement
   const speakAnnouncement = useCallback((message) => {
     // FIRST CHECK: If force stop is active, do NOT speak at all
     if (forceStopActive) {
@@ -170,7 +170,7 @@ function App() {
     speechSynthesisRef.current.speak(utterance);
   }, [alarmSettings.voiceEnabled, forceStopActive, addDebugLog]);
 
-  // Check for alarms - FIXED: Use the exact displayed value
+  // Check for alarms - FIXED: Multiply displayed value by 1000 for alarm comparison
   const checkAlarms = useCallback((data) => {
     // BLOCK ALL ALARM PROCESSING if force stop is active
     if (forceStopActive) {
@@ -178,24 +178,26 @@ function App() {
       return;
     }
 
-    // Use the EXACT value that's displayed in the meter card
-    const currentLoad = parseFloat(data.kVA.value);
+    // Get the displayed value (in kVA) and multiply by 1000 for alarm comparison
+    const displayedValue = parseFloat(data.kVA.value); // This is what users see (e.g., 2.5 for 2500)
+    const currentLoadForAlarm = displayedValue * 1000; // Convert to actual kVA value for alarm check
+    
     const meterName = data.meter_name;
     const timestamp = new Date().toLocaleString();
     
     const newAlarms = [];
 
     // Debug: Log what's being compared
-    addDebugLog(`Alarm Check - Current: ${currentLoad} ${data.kVA.unit}, High: ${alarmSettings.highSetDemand}kVA, Low: ${alarmSettings.lowSetDemand}kVA`);
+    addDebugLog(`Alarm Check - Displayed: ${displayedValue} kVA, For Alarm: ${currentLoadForAlarm} kVA, High: ${alarmSettings.highSetDemand}kVA, Low: ${alarmSettings.lowSetDemand}kVA`);
 
-    // Check high demand - comparing with the exact displayed value
-    if (currentLoad > alarmSettings.highSetDemand) {
+    // Check high demand - compare multiplied value with alarm settings
+    if (currentLoadForAlarm > alarmSettings.highSetDemand) {
       const highAlarm = {
         id: `high-${Date.now()}-${Math.random()}`,
         type: 'HIGH_DEMAND',
-        message: `High demand reached! ${meterName} is at ${currentLoad} kVA`,
+        message: `High demand alert! ${meterName} exceeds high set`,
         meterName,
-        value: currentLoad,
+        value: currentLoadForAlarm,
         unit: 'kVA',
         limit: alarmSettings.highSetDemand,
         timestamp,
@@ -203,17 +205,17 @@ function App() {
         active: true
       };
       newAlarms.push(highAlarm);
-      addDebugLog(`HIGH alarm triggered: ${currentLoad} > ${alarmSettings.highSetDemand}`);
+      addDebugLog(`HIGH alarm triggered: ${currentLoadForAlarm} > ${alarmSettings.highSetDemand}`);
     }
 
-    // Check low demand - comparing with the exact displayed value
-    if (currentLoad < alarmSettings.lowSetDemand) {
+    // Check low demand - compare multiplied value with alarm settings
+    if (currentLoadForAlarm < alarmSettings.lowSetDemand) {
       const lowAlarm = {
         id: `low-${Date.now()}-${Math.random()}`,
         type: 'LOW_DEMAND',
-        message: `Low demand alert! ${meterName} is at ${currentLoad} kVA`,
+        message: `Low demand alert! ${meterName} is below low set`,
         meterName,
-        value: currentLoad,
+        value: currentLoadForAlarm,
         unit: 'kVA',
         limit: alarmSettings.lowSetDemand,
         timestamp,
@@ -221,7 +223,7 @@ function App() {
         active: true
       };
       newAlarms.push(lowAlarm);
-      addDebugLog(`LOW alarm triggered: ${currentLoad} < ${alarmSettings.lowSetDemand}`);
+      addDebugLog(`LOW alarm triggered: ${currentLoadForAlarm} < ${alarmSettings.lowSetDemand}`);
     }
 
     // Add new alarms to state
@@ -237,12 +239,12 @@ function App() {
     // Auto-reset alarms if enabled
     if (alarmSettings.autoResetEnabled) {
       setAlarms(prev => prev.map(alarm => {
-        if (alarm.type === 'HIGH_DEMAND' && currentLoad <= alarm.limit && alarm.active) {
-          addDebugLog(`Auto-reset HIGH alarm: ${currentLoad} <= ${alarm.limit}`);
+        if (alarm.type === 'HIGH_DEMAND' && currentLoadForAlarm <= alarm.limit && alarm.active) {
+          addDebugLog(`Auto-reset HIGH alarm: ${currentLoadForAlarm} <= ${alarm.limit}`);
           return { ...alarm, active: false };
         }
-        if (alarm.type === 'LOW_DEMAND' && currentLoad >= alarm.limit && alarm.active) {
-          addDebugLog(`Auto-reset LOW alarm: ${currentLoad} >= ${alarm.limit}`);
+        if (alarm.type === 'LOW_DEMAND' && currentLoadForAlarm >= alarm.limit && alarm.active) {
+          addDebugLog(`Auto-reset LOW alarm: ${currentLoadForAlarm} >= ${alarm.limit}`);
           return { ...alarm, active: false };
         }
         return alarm;
@@ -374,7 +376,7 @@ function App() {
     addDebugLog('✅ Alarm system re-enabled and ready');
   };
 
-  // Announcement interval management - UPDATED: Early return for force stop
+  // Announcement interval management
   useEffect(() => {
     if (forceStopActive) {
       addDebugLog('Force stop active - not starting announcement interval');
@@ -453,7 +455,8 @@ function App() {
       setMeterData(meterData);
       
       // Log the exact value for debugging
-      addDebugLog(`Meter Data kVA: ${meterData.kVA.value} ${meterData.kVA.unit}`);
+      addDebugLog(`Meter Data: ${meterData.kVA.value} ${meterData.kVA.unit}`);
+      addDebugLog(`For Alarm: ${parseFloat(meterData.kVA.value) * 1000} kVA`);
       
       checkAlarms(meterData);
       
@@ -522,7 +525,7 @@ function App() {
     <div className="App">
       <header className="App-header">
         <div className="header-left">
-          <h1>Power Load Monitor</h1>
+          <h1>Brakes India, Main Incomer Demand Monitoring System</h1>
           <div className="alarm-indicator">
             {forceStopActive && (
               <div className="force-stop-indicator">
@@ -769,12 +772,15 @@ function App() {
                   </div>
 
                   <div className="metrics-grid">
-                    <div className={`metric-card ${parseFloat(meterData.kVA.value) > alarmSettings.highSetDemand ? 'exceeded-high' : 
-                                      parseFloat(meterData.kVA.value) < alarmSettings.lowSetDemand ? 'exceeded-low' : ''}`}>
+                    <div className={`metric-card ${(parseFloat(meterData.kVA.value) * 1000) > alarmSettings.highSetDemand ? 'exceeded-high' : 
+                                      (parseFloat(meterData.kVA.value) * 1000) < alarmSettings.lowSetDemand ? 'exceeded-low' : ''}`}>
                       <div className="metric-label">kVA Load</div>
                       <div className="metric-value">
                         {meterData.kVA.value} <span className="metric-unit">{meterData.kVA.unit}</span>
                       </div>
+                      {/* <div className="conversion-info">
+                        <small>Actual: {(parseFloat(meterData.kVA.value) * 1000).toFixed(0)} kVA (×1000)</small>
+                      </div> */}
                       <div className="limit-indicator">
                         High: {alarmSettings.highSetDemand}kVA | Low: {alarmSettings.lowSetDemand}kVA
                       </div>
