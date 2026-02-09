@@ -170,21 +170,25 @@ function App() {
     speechSynthesisRef.current.speak(utterance);
   }, [alarmSettings.voiceEnabled, forceStopActive, addDebugLog]);
 
-  // Check for alarms - UPDATED: Add early return for force stop
+  // Check for alarms - FIXED: Use the exact displayed value
   const checkAlarms = useCallback((data) => {
     // BLOCK ALL ALARM PROCESSING if force stop is active
     if (forceStopActive) {
-      addDebugLog('FORCE STOP ACTIVE: Skipping ALL alarm processing');
+      addDebugLog('FORCE STOP ACTIVE: Skipping ALL alarm processing (HIGH & LOW)');
       return;
     }
 
+    // Use the EXACT value that's displayed in the meter card
     const currentLoad = parseFloat(data.kVA.value);
     const meterName = data.meter_name;
     const timestamp = new Date().toLocaleString();
     
     const newAlarms = [];
 
-    // Check high demand
+    // Debug: Log what's being compared
+    addDebugLog(`Alarm Check - Current: ${currentLoad} ${data.kVA.unit}, High: ${alarmSettings.highSetDemand}kVA, Low: ${alarmSettings.lowSetDemand}kVA`);
+
+    // Check high demand - comparing with the exact displayed value
     if (currentLoad > alarmSettings.highSetDemand) {
       const highAlarm = {
         id: `high-${Date.now()}-${Math.random()}`,
@@ -202,7 +206,7 @@ function App() {
       addDebugLog(`HIGH alarm triggered: ${currentLoad} > ${alarmSettings.highSetDemand}`);
     }
 
-    // Check low demand
+    // Check low demand - comparing with the exact displayed value
     if (currentLoad < alarmSettings.lowSetDemand) {
       const lowAlarm = {
         id: `low-${Date.now()}-${Math.random()}`,
@@ -306,9 +310,9 @@ function App() {
     }
   };
 
-  // FORCE STOP ALL - Enhanced to completely block all announcements
+  // FORCE STOP ALL - Works for both HIGH and LOW alarms
   const forceStopAnnouncements = () => {
-    addDebugLog('⚡ FORCE STOP: Stopping all announcements and blocking future ones');
+    addDebugLog('⚡ FORCE STOP: Stopping all announcements for BOTH high and low alarms');
     setForceStopActive(true);
     
     // 1. Stop all speech immediately
@@ -324,7 +328,7 @@ function App() {
       addDebugLog('Announcement interval cleared');
     }
     
-    // 3. Acknowledge ALL active alarms (not just current ones)
+    // 3. Acknowledge ALL active alarms (BOTH HIGH AND LOW)
     setAlarms(prev => prev.map(alarm => 
       alarm.active ? { ...alarm, acknowledged: true } : alarm
     ));
@@ -347,10 +351,10 @@ function App() {
     // 5. Also clear any active speaking state
     setIsSpeaking(false);
     
-    addDebugLog('✅ FORCE STOP ACTIVE: All announcements blocked until reset');
+    addDebugLog('✅ FORCE STOP ACTIVE: All announcements blocked for BOTH high and low alarms');
   };
 
-  // RESET FORCE STOP - New function
+  // RESET FORCE STOP
   const resetForceStop = () => {
     addDebugLog('🔄 RESET FORCE STOP: Re-enabling alarm system');
     setForceStopActive(false);
@@ -448,6 +452,9 @@ function App() {
       const meterData = data[0];
       setMeterData(meterData);
       
+      // Log the exact value for debugging
+      addDebugLog(`Meter Data kVA: ${meterData.kVA.value} ${meterData.kVA.unit}`);
+      
       checkAlarms(meterData);
       
     } catch (err) {
@@ -515,7 +522,7 @@ function App() {
     <div className="App">
       <header className="App-header">
         <div className="header-left">
-          <h1>Main Incomer 33kV Demand Alarm System</h1>
+          <h1>Power Load Monitor</h1>
           <div className="alarm-indicator">
             {forceStopActive && (
               <div className="force-stop-indicator">
@@ -886,7 +893,7 @@ function App() {
         </div>
 
         {/* Debug Panel */}
-        {/* <div className={`panel ${openPanels.debug ? 'open' : 'closed'}`}>
+        <div className={`panel ${openPanels.debug ? 'open' : 'closed'}`}>
           <div className="panel-header" onClick={() => togglePanel('debug')}>
             <h3>🐛 Debug Logs</h3>
             <span className="panel-toggle">{openPanels.debug ? '−' : '+'}</span>
@@ -905,7 +912,7 @@ function App() {
               </div>
             </div>
           )}
-        </div> */}
+        </div>
 
       </div>
 
