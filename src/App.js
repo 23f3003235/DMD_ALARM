@@ -46,6 +46,11 @@ function App() {
   const audioContextRef = useRef(null);
   const audioBeepRef = useRef(null);
 
+  // Helper function to parse meter values (removes commas)
+  const parseMeterValue = (valueString) => {
+    return parseFloat(valueString.toString().replace(/,/g, ''));
+  };
+
   // Initialize audio for mobile/browser minimized
   const initAudio = () => {
     if (!audioContextRef.current && window.AudioContext) {
@@ -170,7 +175,7 @@ function App() {
     speechSynthesisRef.current.speak(utterance);
   }, [alarmSettings.voiceEnabled, forceStopActive, addDebugLog]);
 
-  // Check for alarms - FIXED: Multiply displayed value by 1000 for alarm comparison
+  // Check for alarms - FIXED: Proper parsing with comma removal
   const checkAlarms = useCallback((data) => {
     // BLOCK ALL ALARM PROCESSING if force stop is active
     if (forceStopActive) {
@@ -178,9 +183,8 @@ function App() {
       return;
     }
 
-    // Get the displayed value (in kVA) and multiply by 1000 for alarm comparison
-    const displayedValue = parseFloat(data.kVA.value); // This is what users see (e.g., 2.5 for 2500)
-    const currentLoadForAlarm = displayedValue * 1000; // Convert to actual kVA value for alarm check
+    // Parse the value properly (remove commas)
+    const currentLoadForAlarm = parseMeterValue(data.kVA.value);
     
     const meterName = data.meter_name;
     const timestamp = new Date().toLocaleString();
@@ -188,14 +192,14 @@ function App() {
     const newAlarms = [];
 
     // Debug: Log what's being compared
-    addDebugLog(`Alarm Check - Displayed: ${displayedValue} kVA, For Alarm: ${currentLoadForAlarm} kVA, High: ${alarmSettings.highSetDemand}kVA, Low: ${alarmSettings.lowSetDemand}kVA`);
+    addDebugLog(`Alarm Check - Raw Value: "${data.kVA.value}", Parsed: ${currentLoadForAlarm} kVA, High: ${alarmSettings.highSetDemand}kVA, Low: ${alarmSettings.lowSetDemand}kVA`);
 
-    // Check high demand - compare multiplied value with alarm settings
+    // Check high demand
     if (currentLoadForAlarm > alarmSettings.highSetDemand) {
       const highAlarm = {
         id: `high-${Date.now()}-${Math.random()}`,
         type: 'HIGH_DEMAND',
-        message: `High demand alert! ${meterName} exceeds high set`,
+        message: `High demand alert! Main incomer demand is ${currentLoadForAlarm} kVA, which exceeds the high set of ${alarmSettings.highSetDemand} kVA`,
         meterName,
         value: currentLoadForAlarm,
         unit: 'kVA',
@@ -208,12 +212,12 @@ function App() {
       addDebugLog(`HIGH alarm triggered: ${currentLoadForAlarm} > ${alarmSettings.highSetDemand}`);
     }
 
-    // Check low demand - compare multiplied value with alarm settings
+    // Check low demand
     if (currentLoadForAlarm < alarmSettings.lowSetDemand) {
       const lowAlarm = {
         id: `low-${Date.now()}-${Math.random()}`,
         type: 'LOW_DEMAND',
-        message: `Low demand alert! ${meterName} is below low set`,
+        message: `Low demand alert! Main incomer demand is ${currentLoadForAlarm} kVA, which is below the low set of ${alarmSettings.lowSetDemand} kVA`,
         meterName,
         value: currentLoadForAlarm,
         unit: 'kVA',
@@ -456,7 +460,7 @@ function App() {
       
       // Log the exact value for debugging
       addDebugLog(`Meter Data: ${meterData.kVA.value} ${meterData.kVA.unit}`);
-      addDebugLog(`For Alarm: ${parseFloat(meterData.kVA.value) * 1000} kVA`);
+      addDebugLog(`Parsed for Alarm: ${parseMeterValue(meterData.kVA.value)} kVA`);
       
       checkAlarms(meterData);
       
@@ -632,6 +636,95 @@ function App() {
       {/* Collapsible Panels Container */}
       <div className="panels-container">
         
+        
+
+        {/* Meter Data Panel */}
+        <div className={`panel ${openPanels.meterData ? 'open' : 'closed'}`}>
+          <div className="panel-header" onClick={() => togglePanel('meterData')}>
+            <h3>📊 Meter Data</h3>
+            <span className="panel-toggle">{openPanels.meterData ? '−' : '+'}</span>
+          </div>
+          {openPanels.meterData && (
+            <div className="panel-content">
+              {error && (
+                <div className="error-message">
+                  <p>Error: {error}</p>
+                  <button onClick={fetchMeterData}>Retry</button>
+                </div>
+              )}
+
+              {loading && !meterData && (
+                <div className="loading">Loading meter data...</div>
+              )}
+
+              {meterData && (
+                <div className="meter-card">
+                  <div className="meter-header">
+                    <h2>{meterData.meter_name}</h2>
+                    <div className="meter-status">
+                      <span className={`status-badge ${meterData.status?.toLowerCase()}`}>
+                        {meterData.status}
+                      </span>
+                      {activeAlarmsCount > 0 && !forceStopActive && (
+                        <span className="active-alarm-indicator">⚠️ Alarm Active</span>
+                      )}
+                      {forceStopActive && (
+                        <span className="force-stop-active-indicator">🔇 Alarms Silenced</span>
+                      )}
+                    </div>
+                  </div>
+                  
+                  <div className="meter-details">
+                    <div className="detail-row">
+                      <span className="label">Date & Time:</span>
+                      <span className="value">{meterData.date_time}</span>
+                    </div>
+                    
+                    <div className="detail-row">
+                      <span className="label">Location:</span>
+                      <span className="value">{meterData.location}</span>
+                    </div>
+                    
+                    <div className="detail-row">
+                      <span className="label">Hierarchy:</span>
+                      <span className="value">{meterData.hierachy}</span>
+                    </div>
+                  </div>
+
+                  <div className="metrics-grid">
+                    <div className={`metric-card ${
+                      parseMeterValue(meterData.kVA.value) > alarmSettings.highSetDemand ? 'exceeded-high' : 
+                      parseMeterValue(meterData.kVA.value) < alarmSettings.lowSetDemand ? 'exceeded-low' : ''
+                    }`}>
+                      <div className="metric-label">kVA Load</div>
+                      <div className="metric-value">
+                        {meterData.kVA.value} <span className="metric-unit">{meterData.kVA.unit}</span>
+                      </div>
+                      {/* <div className="conversion-info">
+                        <small>Parsed value: {parseMeterValue(meterData.kVA.value)} kVA (comma removed)</small>
+                      </div> */}
+                      <div className="limit-indicator">
+                        High: {alarmSettings.highSetDemand}kVA | Low: {alarmSettings.lowSetDemand}kVA
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="last-updated">
+                    Last updated: {new Date().toLocaleTimeString()}
+                    {forceStopActive && <span style={{color: '#dc3545', fontWeight: 'bold', marginLeft: '10px'}}> | 🔇 ALARMS SILENCED</span>}
+                  </div>
+                </div>
+              )}
+
+              {!meterData && !loading && !error && (
+                <div className="no-data">
+                  <p>No meter data available. Click "Refresh Data" to fetch.</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* Settings Panel */}
         <div className={`panel ${openPanels.settings ? 'open' : 'closed'}`}>
           <div className="panel-header" onClick={() => togglePanel('settings')}>
@@ -714,91 +807,6 @@ function App() {
                   {forceStopActive && ' | ⚠️ FORCE STOP ACTIVE - ALL ANNOUNCEMENTS BLOCKED'}
                 </small>
               </div>
-            </div>
-          )}
-        </div>
-
-        {/* Meter Data Panel */}
-        <div className={`panel ${openPanels.meterData ? 'open' : 'closed'}`}>
-          <div className="panel-header" onClick={() => togglePanel('meterData')}>
-            <h3>📊 Meter Data</h3>
-            <span className="panel-toggle">{openPanels.meterData ? '−' : '+'}</span>
-          </div>
-          {openPanels.meterData && (
-            <div className="panel-content">
-              {error && (
-                <div className="error-message">
-                  <p>Error: {error}</p>
-                  <button onClick={fetchMeterData}>Retry</button>
-                </div>
-              )}
-
-              {loading && !meterData && (
-                <div className="loading">Loading meter data...</div>
-              )}
-
-              {meterData && (
-                <div className="meter-card">
-                  <div className="meter-header">
-                    <h2>{meterData.meter_name}</h2>
-                    <div className="meter-status">
-                      <span className={`status-badge ${meterData.status?.toLowerCase()}`}>
-                        {meterData.status}
-                      </span>
-                      {activeAlarmsCount > 0 && !forceStopActive && (
-                        <span className="active-alarm-indicator">⚠️ Alarm Active</span>
-                      )}
-                      {forceStopActive && (
-                        <span className="force-stop-active-indicator">🔇 Alarms Silenced</span>
-                      )}
-                    </div>
-                  </div>
-                  
-                  <div className="meter-details">
-                    <div className="detail-row">
-                      <span className="label">Date & Time:</span>
-                      <span className="value">{meterData.date_time}</span>
-                    </div>
-                    
-                    <div className="detail-row">
-                      <span className="label">Location:</span>
-                      <span className="value">{meterData.location}</span>
-                    </div>
-                    
-                    <div className="detail-row">
-                      <span className="label">Hierarchy:</span>
-                      <span className="value">{meterData.hierachy}</span>
-                    </div>
-                  </div>
-
-                  <div className="metrics-grid">
-                    <div className={`metric-card ${(parseFloat(meterData.kVA.value) * 1000) > alarmSettings.highSetDemand ? 'exceeded-high' : 
-                                      (parseFloat(meterData.kVA.value) * 1000) < alarmSettings.lowSetDemand ? 'exceeded-low' : ''}`}>
-                      <div className="metric-label">kVA Load</div>
-                      <div className="metric-value">
-                        {meterData.kVA.value} <span className="metric-unit">{meterData.kVA.unit}</span>
-                      </div>
-                      {/* <div className="conversion-info">
-                        <small>Actual: {(parseFloat(meterData.kVA.value) * 1000).toFixed(0)} kVA (×1000)</small>
-                      </div> */}
-                      <div className="limit-indicator">
-                        High: {alarmSettings.highSetDemand}kVA | Low: {alarmSettings.lowSetDemand}kVA
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="last-updated">
-                    Last updated: {new Date().toLocaleTimeString()}
-                    {forceStopActive && <span style={{color: '#dc3545', fontWeight: 'bold', marginLeft: '10px'}}> | 🔇 ALARMS SILENCED</span>}
-                  </div>
-                </div>
-              )}
-
-              {!meterData && !loading && !error && (
-                <div className="no-data">
-                  <p>No meter data available. Click "Refresh Data" to fetch.</p>
-                </div>
-              )}
             </div>
           )}
         </div>
@@ -899,7 +907,7 @@ function App() {
         </div>
 
         {/* Debug Panel */}
-        <div className={`panel ${openPanels.debug ? 'open' : 'closed'}`}>
+        {/* <div className={`panel ${openPanels.debug ? 'open' : 'closed'}`}>
           <div className="panel-header" onClick={() => togglePanel('debug')}>
             <h3>🐛 Debug Logs</h3>
             <span className="panel-toggle">{openPanels.debug ? '−' : '+'}</span>
@@ -918,7 +926,7 @@ function App() {
               </div>
             </div>
           )}
-        </div>
+        </div> */}
 
       </div>
 
